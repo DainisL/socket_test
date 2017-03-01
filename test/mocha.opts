@@ -1,0 +1,7 @@
+--require ./test/common.js
+--recursive
+--check-leaks
+--colors
+--timeout 50000
+--slow 500
+--full-trace
