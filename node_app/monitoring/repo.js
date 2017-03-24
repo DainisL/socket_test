@@ -1,5 +1,6 @@
 "use strict";
 const Channel = require('./channel');
+const url = require('url');
 const { EventEmitter2 } = require('eventemitter2');
 
 const REPO_STATES = {
@@ -11,10 +12,10 @@ const REPO_STATES = {
 }
 
 class Repo extends EventEmitter2 {
-  constructor(wsModule, url, options) {
+  constructor(wsModule, url, connectionOptions) {
     super({verboseMemoryLeak: true});
     this.messageBuffer = [];
-    this.options = options;
+    this.connectionOptions = connectionOptions || {};
     this.url = url,
     this.adapter = null;
     this.state = REPO_STATES.build;
@@ -32,10 +33,16 @@ class Repo extends EventEmitter2 {
   }
 
   connect(){
-    this.startAdapter();
     this.changeState('connecting');
+    this.startAdapter();
   }
   bindEvents() {
+    this.on("reconnecting", () => {
+      this.closeAllChannel();
+        setTimeout(() => {
+          this.startAdapter();
+      }, 2000);
+    })
     this.on("processMessage", () => {
       if(this.state == REPO_STATES.open){
         let payload = this.messageBuffer.shift();
@@ -54,7 +61,9 @@ class Repo extends EventEmitter2 {
       });
     }
 
-    this.adapter = new this.wsModule(this.url);
+    let urlObject = url.parse(this.url)
+    urlObject.query = this.connectionOptions
+    this.adapter = new this.wsModule(urlObject.format());
     this.subscribeAdapterEvents();
   }
 
@@ -66,18 +75,22 @@ class Repo extends EventEmitter2 {
 
   reconnecting(){
     this.changeState("reconnecting");
-    this.closeAllChannel();
-    setTimeout(() => {
-      this.startAdapter();
-    }, 2000);
   }
+
   subscribeAdapterEvents(){
     this.adapter.on("message", (resp) => {
       this._messageBroke(resp);
     });
 
-    this.adapter.on('error', (err) => {
-      this.reconnecting();
+    this.adapter.on('error', (e) => {
+      switch (e.code){
+        case 'ECONNREFUSED':
+          this.reconnecting();
+          break;
+        default:
+          this.changeState("closed");
+          break;
+        }
     });
 
     this.adapter.on('close', (code) => {
@@ -87,7 +100,7 @@ class Repo extends EventEmitter2 {
           console.log("WebSocket: closed");
           break;
         default:    // Abnormal closure
-          this.reconnecting();
+          this.reconnecting()
           break;
       }
     });
@@ -103,7 +116,6 @@ class Repo extends EventEmitter2 {
       let channel = this.channels[item];
       channel.join();
     });
-
     this.emit("processMessage");
     return this.channels;
   }
@@ -124,7 +136,13 @@ class Repo extends EventEmitter2 {
     }
   }
   send(payload){
-    this.adapter.send(JSON.stringify(payload));
+    if(this.adapter && this.state == REPO_STATES.open){
+      try {
+        this.adapter.send(JSON.stringify(payload));
+      } catch (error) {
+        this.adapter.emit('error', error)
+      }
+    }
   }
   _messageBroke(messageString) {
     let message = JSON.parse(messageString);

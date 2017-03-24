@@ -1,3 +1,4 @@
+
 "use strict";
 const { EventEmitter2 } = require('eventemitter2');
 const Store = require('./store');
@@ -21,18 +22,24 @@ const CHANNEL_STATES = {
 }
 
 class Channel extends EventEmitter2 {
-    constructor(name){
+    constructor(name, options){
       super({verboseMemoryLeak: true});
       this.topic =  name;
+      this.options = options || {};
       this.state =  CHANNEL_STATES.set;
       this.messages =  new Store();
       this.on('incomingMessage', (message) => { this.incomingMessage(message)});
+      this.on('closed', (message) => {
+        this.clearStore();
+      });
     }
     push(event, payload){
-      let message = this.buildMessage(payload, event);
-      message.setSent();
-      this.emit("outgoingMessage", message.toParams());
-      return message;
+      if(this.state != CHANNEL_STATES.closed){
+        let message = this.buildMessage(payload, event);
+        message.setSent();
+        this.emit("outgoingMessage", message.toParams());
+        return message;
+      }
     }
     clearStore(){
       this.messages =  new Store();
@@ -48,7 +55,7 @@ class Channel extends EventEmitter2 {
 
     join(){
       if(this.canJoin()){
-        let message = this.buildMessage({}, CHANNEL_EVENTS.join);
+        let message = this.buildMessage(this.options, CHANNEL_EVENTS.join);
         this.changeState('joining');
         message.setSent();
         this.emit("outgoingMessage", message.toParams());
@@ -92,7 +99,7 @@ class Channel extends EventEmitter2 {
           this.incomingJoin(eventMessage, message);
           break;
         case CHANNEL_EVENTS.error:
-          this.replyError(eventMessage, messageage);
+          this.replyError(eventMessage, message);
           break;
         case CHANNEL_EVENTS.reply:
           this.incomingReply(eventMessage, message);
@@ -122,6 +129,9 @@ class Channel extends EventEmitter2 {
     }
     incomingError(message, reply){
       this.changeState('errored');
+      this.rejectMessage(message, reply)
+    }
+    replyError(message, reply){
       this.rejectMessage(message, reply)
     }
     incomingReply(message, reply){
